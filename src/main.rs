@@ -328,13 +328,12 @@ mod tests {
         }
         for mode in ["--no-gc", "--gui", "--install", "--uninstall", "--once"] {
             assert!(
-                Args::try_parse_from(["deadlock-api-ingest", mode, "--account-id", "101",]).is_err(),
+                Args::try_parse_from(["deadlock-api-ingest", mode, "--account-id", "101",])
+                    .is_err(),
                 "account selection accepted with {mode}"
             );
         }
-        assert!(
-            Args::try_parse_from(["deadlock-api-ingest", "--account-id", "101",]).is_err()
-        );
+        assert!(Args::try_parse_from(["deadlock-api-ingest", "--account-id", "101",]).is_err());
         let args = Args::try_parse_from([
             "deadlock-api-ingest",
             "--own-matches",
