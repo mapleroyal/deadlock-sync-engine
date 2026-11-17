@@ -43,7 +43,7 @@ struct Args {
     own_matches: bool,
 
     /// Recover only this remembered Steam account (32-bit account ID); never falls back
-    #[arg(long, requires = "own_matches")]
+    #[arg(long, requires = "own_matches", conflicts_with_all = ["once", "no_gc", "gui", "install", "uninstall", "command"])]
     account_id: Option<NonZeroU32>,
 
     /// Open the status window; installs and starts the background service if it isn't running
