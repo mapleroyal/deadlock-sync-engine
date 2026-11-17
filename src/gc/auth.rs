@@ -106,6 +106,12 @@ fn all_account_ids(steam_dir: &Path) -> Result<Vec<(u64, String)>, GcError> {
 /// skipped with a warning rather than failing the whole recovery — this is what
 /// makes multi-account best-effort (some accounts simply can't do requests).
 pub(crate) fn recover_all() -> Result<Vec<AuthContext>, GcError> {
+    recover_for(None)
+}
+
+/// Recover only a selected public Steam account when supplied. Selection happens
+/// before decrypting sessions, and an absent/unusable selection never falls back.
+pub(crate) fn recover_for(account_id: Option<u32>) -> Result<Vec<AuthContext>, GcError> {
     let steam_dir = crate::steam_dir::primary().ok_or_else(|| err("Steam not found"))?;
     let local_vdf = local_vdf_path(steam_dir)?;
     let text = std::fs::read_to_string(&local_vdf)
@@ -115,7 +121,7 @@ pub(crate) fn recover_all() -> Result<Vec<AuthContext>, GcError> {
         .map_err(|e| err(format!("cannot parse local.vdf: {e}")))?;
 
     let mut contexts = Vec::new();
-    for (steam_id64, account_name) in all_account_ids(steam_dir)? {
+    for (steam_id64, account_name) in selected_accounts(all_account_ids(steam_dir)?, account_id)? {
         let recovered = connect_cache_blob(&vdf, &account_name)
             .and_then(|blob| decrypt_blob(&blob, &account_name))
             .and_then(|jwt| steam_id_from_jwt(&jwt).map(|sub| (jwt, sub)));
@@ -135,9 +141,33 @@ pub(crate) fn recover_all() -> Result<Vec<AuthContext>, GcError> {
     }
 
     if contexts.is_empty() {
-        return Err(err("no decryptable Steam account found"));
+        return Err(err(if account_id.is_some() {
+            "selected Steam account has no decryptable remembered login"
+        } else {
+            "no decryptable Steam account found"
+        }));
     }
     Ok(contexts)
+}
+
+fn selected_accounts(
+    accounts: Vec<(u64, String)>,
+    account_id: Option<u32>,
+) -> Result<Vec<(u64, String)>, GcError> {
+    let Some(account_id) = account_id else {
+        return Ok(accounts);
+    };
+    let steam_id64 = crate::steam_user::STEAM_ID_64_IDENT + u64::from(account_id);
+    let selected: Vec<_> = accounts
+        .into_iter()
+        .filter(|(id, _)| *id == steam_id64)
+        .collect();
+    if selected.is_empty() {
+        return Err(err(
+            "selected Steam account is not remembered in the active Steam install",
+        ));
+    }
+    Ok(selected)
 }
 
 fn connect_cache_blob(vdf: &Vdf, account: &str) -> Result<Vec<u8>, GcError> {
@@ -229,6 +259,27 @@ fn steam_id_from_jwt(jwt: &str) -> Result<u64, GcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_account_is_exact_and_missing_does_not_fall_back() {
+        let base = crate::steam_user::STEAM_ID_64_IDENT;
+        let accounts = vec![
+            (base + 101, "first".to_owned()),
+            (base + 202, "second".to_owned()),
+        ];
+        let selected = selected_accounts(accounts.clone(), Some(202)).expect("remembered account");
+        assert_eq!(selected, vec![(base + 202, "second".to_owned())]);
+        assert!(selected_accounts(accounts.clone(), Some(303)).is_err());
+        assert_eq!(selected_accounts(accounts.clone(), None).unwrap(), accounts);
+    }
+
+    #[test]
+    fn account_selection_rejects_other_universe_with_same_low_bits() {
+        let public = crate::steam_user::STEAM_ID_64_IDENT + 101;
+        let other = public + (1_u64 << 56);
+        assert_eq!(account_id_of(other), 101);
+        assert!(selected_accounts(vec![(other, "other".to_owned())], Some(101)).is_err());
+    }
 
     fn parse(text: &str) -> Vdf<'_> {
         Vdf::from(keyvalues_parser::parse(text).expect("valid vdf"))

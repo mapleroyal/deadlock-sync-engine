@@ -1,5 +1,9 @@
 # Deadlock API Ingest
 
+> **Deadlock Sync fork:** this checkout adds strict single-account recovery for
+> the Deadlock Sync supervisor. See [FORK.md](FORK.md) for provenance, scope and
+> build instructions. The upstream documentation below describes the original app.
+
 A lightweight background tool that monitors your Steam HTTP cache for Deadlock game replay files and automatically submits match metadata to the Deadlock API. This helps build a comprehensive database of Deadlock matches for the community.
 
 ## How It Works

@@ -1,418 +1,67 @@
-name: Rust CI/CD
+name: Account-aware engine build
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: account-engine-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
-permissions:
-  contents: write
-  packages: write
-  actions: read
-  security-events: write
-
-concurrency:
-  # Master runs publish releases and the Docker image, so they queue instead of cancelling
-  # each other halfway through a publish; other branches only need their newest run.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
-  group: ${{ github.workflow }}-${{ github.ref }}
-
 jobs:
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Update Rust toolchain to stable
-        run: |
-          rustup override set stable
-          rustup update stable
-          rustup component add rustfmt
-      - name: Rustfmt Check
-        uses: actions-rust-lang/rustfmt@v1
-
-  deps:
-    name: Dependencies
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Update Rust toolchain to stable
-        run: |
-          rustup override set stable
-          rustup update stable
-      - name: Machete
-        uses: bnjbvr/cargo-machete@7959c845782fed02ee69303126d4a12d64f1db18
-
-  audit:
-    name: Audit
-    runs-on: ubuntu-latest
-    # rustsec/audit-check reports warnings (e.g. yanked crates) as a check run.
-    permissions:
-      contents: read
-      checks: write
-    steps:
-      - uses: actions/checkout@v5
-      - name: Update Rust toolchain to stable
-        run: |
-          rustup override set stable
-          rustup update stable
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  typos:
-    name: Typos
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Update Rust toolchain to stable
-        run: |
-          rustup override set stable
-          rustup update stable
-      - uses: taiki-e/cache-cargo-install-action@v2
-        with:
-          tool: typos-cli
-      - name: Typos Check
-        run: typos src/
-
-  lint:
-    name: Lint
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - platform: windows-latest
-            target: x86_64-pc-windows-gnu
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install protoc
-        uses: taiki-e/install-action@v2
-        with:
-          tool: protoc
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "build-cache-${{ runner.os }}-${{ runner.arch }}-stable"
-      - name: Update Rust toolchain to stable
-        run: |
-          rustup override set stable
-          rustup update stable
-          rustup target add ${{ matrix.target }}
-          rustup component add clippy
-      - name: Cargo Clippy (Deny Warnings)
-        run: cargo clippy --all-targets --locked -- -D warnings
-
-  test:
-    name: Test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - platform: windows-latest
-            target: x86_64-pc-windows-gnu
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install protoc
-        uses: taiki-e/install-action@v2
-        with:
-          tool: protoc
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "build-cache-${{ runner.os }}-${{ runner.arch }}-stable"
-      - name: Update Rust toolchain to stable
-        run: |
-          rustup override set stable
-          rustup update stable
-          rustup target add ${{ matrix.target }}
-      - name: Run tests
-        run: cargo test --locked
-
-  shellcheck-installer:
-    name: Shellcheck Installer Script
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Shellcheck
-        uses: ludeeus/action-shellcheck@master
-
-  powershell-analyzer:
-    name: PowerShell Analyzer
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: lint
-        uses: devblackops/github-action-psscriptanalyzer@master
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          failOnWarnings: 'false'
-          sendComment: 'false'
-
   build:
-    name: Build
-    needs: [ fmt, deps, audit, typos, lint, test, shellcheck-installer, powershell-analyzer ]
     strategy:
       fail-fast: false
       matrix:
         include:
-          # The binary needs the build runner's glibc or newer: 22.04's (2.35) also runs on
-          # Ubuntu 22.04 and Debian 12, where a 24.04 build (2.38) doesn't start. The asset
-          # keeps its name, which the installers and the self-updater look for.
-          - platform: ubuntu-22.04
+          - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            binary_name: deadlock-api-ingest
-            asset_name: deadlock-api-ingest-ubuntu-latest
-          - platform: windows-latest
+            binary: deadlock-api-ingest
+            artifact: deadlock-sync-engine-linux-x64
+          - runner: windows-latest
             target: x86_64-pc-windows-gnu
-            binary_name: deadlock-api-ingest.exe
-            asset_name: deadlock-api-ingest-windows-latest.exe
-    runs-on: ${{ matrix.platform }}
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
+            binary: deadlock-api-ingest.exe
+            artifact: deadlock-sync-engine-windows-x64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0  # Fetch full history for proper versioning
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
+          rustup override set 1.98.0
+          rustup target add ${{ matrix.target }}
       - name: Install protoc
         uses: taiki-e/install-action@v2
         with:
           tool: protoc
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
         with:
-          # Per runner image, not shared with lint and test on ubuntu-latest: C code compiled
-          # against a newer glibc's headers doesn't link on ubuntu-22.04.
-          shared-key: "build-${{ matrix.platform }}-${{ runner.arch }}-stable"
-      - name: Update Rust toolchain
-        run: |
-          rustup override set stable
-          rustup update stable
-          rustup target add ${{ matrix.target }}
-      - name: Generate version
-        id: version
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          CARGO_VERSION=$(grep '^version' Cargo.toml | head -n 1 | sed -e 's/version = "//' -e 's/"//')
-          SHORT_SHA=$(git rev-parse --short HEAD)
-          VERSION="v${CARGO_VERSION}"
-          VERSION_SHA="v${CARGO_VERSION}-${SHORT_SHA}"
-          EXISTING_TAGS=$(gh release list --repo ${{ github.repository }} --limit 1000 --json tagName -q '.[].tagName' || echo "")
-          if echo "$EXISTING_TAGS" | grep -x "$VERSION"; then
-            echo "Release for version $VERSION already exists. Creating a pre-release."
-            echo "version=$VERSION_SHA" >> $GITHUB_OUTPUT
-            echo "is_prerelease=true" >> $GITHUB_OUTPUT
-          else
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-            echo "is_prerelease=false" >> $GITHUB_OUTPUT
-          fi
-      - name: Build release binary
+          shared-key: account-engine-${{ matrix.runner }}-${{ matrix.target }}-1.98
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check warnings
+        run: cargo clippy --locked --all-targets --target ${{ matrix.target }} -- -D warnings
+      - name: Synthetic tests (no Steam account or game)
+        run: cargo test --locked --target ${{ matrix.target }}
+      - name: Build release
         run: cargo build --locked --release --target ${{ matrix.target }}
-      - name: Prepare binary (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Stage only the worker and license
         run: |
-          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} ${{ matrix.asset_name }}
-          # The memory helper install-linux.sh sets up; its name must not contain "ubuntu-latest".
-          cp target/${{ matrix.target }}/release/deadlock-api-ingest-memgrant deadlock-api-ingest-memgrant-linux
-          chmod +x ${{ matrix.asset_name }} deadlock-api-ingest-memgrant-linux
-          ls -la ${{ matrix.asset_name }} deadlock-api-ingest-memgrant-linux
-      - name: Prepare binary (Windows)
-        if: matrix.platform == 'windows-latest'
-        run: |
-          copy target\${{ matrix.target }}\release\${{ matrix.binary_name }} ${{ matrix.asset_name }}
-          # Same exe; the "-setup" name makes it install itself when double-clicked
-          copy target\${{ matrix.target }}\release\${{ matrix.binary_name }} deadlock-api-ingest-setup.exe
-          Get-Item ${{ matrix.asset_name }}, deadlock-api-ingest-setup.exe
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v5
+          mkdir -p artifact
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} artifact/
+          cp LICENSE FORK.md artifact/
+          sha256sum artifact/${{ matrix.binary }}
+      - uses: actions/upload-artifact@v5
         with:
-          name: ${{ matrix.asset_name }}
-          path: ${{ matrix.asset_name }}
-          retention-days: 1
-      - name: Upload memory helper artifact (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
-        uses: actions/upload-artifact@v5
-        with:
-          name: deadlock-api-ingest-memgrant-linux
-          path: deadlock-api-ingest-memgrant-linux
-          retention-days: 1
-      - name: Upload Windows installer artifact
-        if: matrix.platform == 'windows-latest'
-        uses: actions/upload-artifact@v5
-        with:
-          name: deadlock-api-ingest-setup.exe
-          path: deadlock-api-ingest-setup.exe
-          retention-days: 1
-
-  windows-smoke:
-    name: Windows Smoke Test
-    # Tests the exact exe that gets released instead of building another one.
-    needs: [ build ]
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          sparse-checkout: .github/scripts
-      - name: Download release exe
-        uses: actions/download-artifact@v6
-        with:
-          name: deadlock-api-ingest-windows-latest.exe
-          path: build
-      - name: Installer, status window and console flash
-        shell: pwsh
-        run: .github/scripts/windows-smoke.ps1 -Exe build/deadlock-api-ingest-windows-latest.exe -OutDir windows-smoke
-      - name: Upload screenshots
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: windows-smoke-screenshots
-          path: windows-smoke
-          retention-days: 7
-
-  build-cache-nix:
-    name: Build & Cache Nix Package
-    needs: [ fmt, deps, audit, typos, lint, test, shellcheck-installer, powershell-analyzer ]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
-        with:
-          nix_path: nixpkgs=channel:nixos-unstable
-      - name: Setup Cachix
-        uses: cachix/cachix-action@v15
-        with:
-          name: deadlock-api-ingest
-          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
-          # Push only on master branch
-          skipPush: ${{ github.ref != 'refs/heads/master' }}
-      - name: Build with Nix
-        run: nix build --print-build-logs
-      - name: Check flake
-        run: nix flake check
-
-  build-push-docker:
-    name: Build, Scan & Push Docker Image
-    needs: [ build ]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build and load Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          load: true
-          tags: ghcr.io/deadlock-api/deadlock-api-ingest:${{ needs.build.outputs.version }},ghcr.io/deadlock-api/deadlock-api-ingest:latest
-      - name: Scan for vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ghcr.io/deadlock-api/deadlock-api-ingest:latest
-          format: 'table'
-          exit-code: 0
-          output: 'trivy-report.txt'
-      - name: Upload Trivy report
-        uses: actions/upload-artifact@v5
-        with:
-          name: trivy-report
-          path: trivy-report.txt
-          retention-days: 30
-      - name: Scan for vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ghcr.io/deadlock-api/deadlock-api-ingest:latest
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          skip-setup-trivy: true
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push Docker image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-        run: |
-          docker push ghcr.io/deadlock-api/deadlock-api-ingest:${{ needs.build.outputs.version }}
-          docker push ghcr.io/deadlock-api/deadlock-api-ingest:latest
-
-  release:
-    name: Create Release
-    needs: [ build, windows-smoke ]
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    permissions:
-      contents: write
-      # For the build provenance attestation of the release files
-      id-token: write
-      attestations: write
-      artifact-metadata: write
-    steps:
-      - uses: actions/checkout@v5
-      - name: Download all artifacts
-        uses: actions/download-artifact@v6
-        with:
-          path: ./artifacts
-      - name: Prepare release assets
-        run: |
-          mkdir -p ./release-assets
-          find ./artifacts -name "deadlock-api-ingest-*" -type f -exec cp {} ./release-assets/ \;
-          cp install-linux.sh install-windows.ps1 ./release-assets/
-          (cd ./release-assets && sha256sum * > SHA256SUMS)
-          ls -la ./release-assets/
-      - name: Attest release assets
-        uses: actions/attest@v4
-        with:
-          subject-path: ./release-assets/*
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ needs.build.outputs.version }}
-          # Without it the tag goes on master's head at release time, not on the commit built.
-          target_commitish: ${{ github.sha }}
-          name: |
-            ${{ needs.build.outputs.is_prerelease == 'true' && 'Nightly - ' || '' }}Deadlock API Ingest ${{ needs.build.outputs.version }}
-          body: |
-            ## Installation
-
-            **Windows (recommended):**
-            Download and run [deadlock-api-ingest-setup.exe](https://github.com/deadlock-api/deadlock-api-ingest/releases/download/${{ needs.build.outputs.version }}/deadlock-api-ingest-setup.exe). No admin rights needed.
-
-            **Windows (PowerShell):**
-            Open a PowerShell window and run the following command (no admin rights needed):
-            ```powershell
-            irm https://github.com/deadlock-api/deadlock-api-ingest/releases/download/${{ needs.build.outputs.version }}/install-windows.ps1 | iex
-            ```
-
-            **Linux (Bash):**
-            Open a terminal and run the following command as your own user, without sudo:
-            ```bash
-            curl -fsSL https://github.com/deadlock-api/deadlock-api-ingest/releases/download/${{ needs.build.outputs.version }}/install-linux.sh | bash
-            ```
-            Without curl (Ubuntu's desktop install has wget instead):
-            ```bash
-            wget -O- https://github.com/deadlock-api/deadlock-api-ingest/releases/download/${{ needs.build.outputs.version }}/install-linux.sh | bash
-            ```
-
-            ## Changes
-            - Latest updates from commit ${{ github.sha }}
-          files: |
-            ./release-assets/*
-            ./README.md
-          draft: false
-          prerelease: ${{ needs.build.outputs.is_prerelease }}
-          make_latest: true
+          name: ${{ matrix.artifact }}
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 14

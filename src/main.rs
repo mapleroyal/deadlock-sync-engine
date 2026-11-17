@@ -12,6 +12,7 @@
 #![deny(clippy::std_instead_of_core)]
 #![allow(clippy::unreadable_literal)]
 
+use core::num::NonZeroU32;
 use std::fs::{File, TryLockError};
 
 use clap::Parser;
@@ -40,6 +41,10 @@ struct Args {
     /// Recover salts for your own match history via the Steam Game Coordinator, then exit
     #[arg(long, conflicts_with_all = ["once", "no_gc", "command"])]
     own_matches: bool,
+
+    /// Recover only this remembered Steam account (32-bit account ID); never falls back
+    #[arg(long, requires = "own_matches")]
+    account_id: Option<NonZeroU32>,
 
     /// Open the status window; installs and starts the background service if it isn't running
     #[arg(long, conflicts_with_all = ["once", "no_gc", "own_matches", "install", "uninstall", "command"])]
@@ -192,7 +197,9 @@ fn main() {
     }
 
     if args.own_matches {
-        std::process::exit(i32::from(!gc::run_own_matches_blocking()));
+        std::process::exit(i32::from(!gc::run_own_matches_blocking(
+            args.account_id.map(NonZeroU32::get),
+        )));
     }
 
     // Only the long-running watcher is single-instance: `--once` is a short manual run, and
@@ -304,6 +311,45 @@ fn watch_cache_dirs(cache_dirs: Vec<std::path::PathBuf>) -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_account_requires_own_history_and_a_nonzero_id32() {
+        for invalid in ["0", "-1", "4294967296", "76561197960265829", "not-an-id"] {
+            assert!(
+                Args::try_parse_from([
+                    "deadlock-api-ingest",
+                    "--own-matches",
+                    "--account-id",
+                    invalid,
+                ])
+                .is_err(),
+                "accepted invalid account {invalid}"
+            );
+        }
+        for mode in ["--no-gc", "--gui", "--install", "--uninstall", "--once"] {
+            assert!(
+                Args::try_parse_from(["deadlock-api-ingest", mode, "--account-id", "101",]).is_err(),
+                "account selection accepted with {mode}"
+            );
+        }
+        assert!(
+            Args::try_parse_from(["deadlock-api-ingest", "--account-id", "101",]).is_err()
+        );
+        let args = Args::try_parse_from([
+            "deadlock-api-ingest",
+            "--own-matches",
+            "--account-id",
+            "4294967295",
+        ])
+        .expect("full nonzero account ID32 range");
+        assert_eq!(args.account_id.map(NonZeroU32::get), Some(u32::MAX));
+        assert!(
+            Args::try_parse_from(["deadlock-api-ingest", "--own-matches"])
+                .expect("upstream all-account mode remains valid")
+                .account_id
+                .is_none()
+        );
+    }
 
     #[test]
     fn no_memory_goes_with_every_mode() {

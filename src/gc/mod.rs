@@ -548,19 +548,22 @@ fn active_friends(friends: &[u32]) -> Result<Vec<ActiveFriend>, GcError> {
 /// One-shot: recover salts for every match in each remembered account's own match history
 /// that deadlock-api doesn't know yet. Ignores the 40/24h quota and runs until done or
 /// until Steam rate-limits the account. Returns whether every match was recovered.
-pub(crate) fn run_own_matches_blocking() -> bool {
+pub(crate) fn run_own_matches_blocking(account_id: Option<u32>) -> bool {
     let mut sys = crate::game_process::new_system();
     if game_running(&mut sys) {
         warn!("Deadlock is running, close it and run this again");
         return false;
     }
-    let contexts = match auth::recover_all() {
+    let contexts = match auth::recover_for(account_id) {
         Ok(c) => c,
         Err(e) => {
             warn!("gc: no usable Steam account (is Steam logged in with 'remember me'?): {e}");
             return false;
         }
     };
+    if let Some(account) = account_id {
+        info!("gc: selected account {account} for own-history recovery");
+    }
     let Some(runtime) = runtime() else {
         return false;
     };
