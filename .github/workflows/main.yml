@@ -32,7 +32,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: |
           rustup toolchain install 1.98.0 --profile minimal --component rustfmt --component clippy
@@ -59,7 +59,7 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} artifact/
           cp LICENSE FORK.md artifact/
           sha256sum artifact/${{ matrix.binary }}
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: artifact/
