@@ -47,3 +47,7 @@ cargo +1.98.0 build --locked --release --target x86_64-pc-windows-gnu
 Run native Windows checks on an available test environment separately; a Linux
 cross-build alone does not prove Windows execution. Never wake a user's gaming
 VM or displays without authorization. Build binaries stay outside source control.
+
+Automated dependency-update configuration is removed as well; maintenance and
+builds run locally. `tools/windows-smoke.ps1` is an explicit local test script,
+not a workflow. GitHub Actions remains disabled.
